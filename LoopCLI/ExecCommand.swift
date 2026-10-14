@@ -41,43 +41,23 @@ struct ExecCommand: ParsableCommand, CLIRequestCommand {
     @OptionGroup
     var outputOptions: OutputOptions
 
-    var outputMode: OutputOptions.Mode {
-        outputOptions.outputMode
+    /// One per selector given; `validate()` makes sure there's exactly one
+    private var routes: [LoopRoute] {
+        let selected: [LoopRoute?] = [
+            preset.map { .exec(.preset, name: $0) },
+            custom.map { .exec(.custom, name: $0) },
+            actionID.map { .execID($0.value.uuidString.lowercased()) }
+        ]
+        return selected.compactMap(\.self)
     }
 
     func validate() throws {
-        let selectorCount = (preset == nil ? 0 : 1)
-            + (custom == nil ? 0 : 1)
-            + (actionID == nil ? 0 : 1)
-        guard selectorCount == 1 else {
+        guard routes.count == 1 else {
             throw ValidationError("Exactly one of --preset, --custom, or --id is required")
         }
     }
 
-    func makeRequest() throws -> CLIRequest {
-        let queryItems = targetOptions.queryItems
-
-        if let preset {
-            return CLIRequest(
-                routeComponents: ["exec", "preset", preset],
-                queryItems: queryItems
-            )
-        }
-
-        if let custom {
-            return CLIRequest(
-                routeComponents: ["exec", "custom", custom],
-                queryItems: queryItems
-            )
-        }
-
-        if let actionID {
-            return CLIRequest(
-                routeComponents: ["exec", "id", actionID.value.uuidString.lowercased()],
-                queryItems: queryItems
-            )
-        }
-
-        throw ValidationError("Exactly one of --preset, --custom, or --id is required")
+    func makeRequest() -> CLIRequest {
+        CLIRequest(route: routes[0], queryItems: targetOptions.queryItems)
     }
 }

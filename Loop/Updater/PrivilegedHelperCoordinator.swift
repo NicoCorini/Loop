@@ -57,11 +57,6 @@ final class PrivilegedHelperCoordinator {
             try await coordinator.performXPCOperation(connection: connection, operation: operation)
         }
 
-        func reinstallCommandLineTool() async throws {
-            let operation = PrivilegedOperation.reinstallCommandLineTool
-            try await coordinator.performXPCOperation(connection: connection, operation: operation)
-        }
-
         func uninstallCommandLineTool() async throws {
             let operation = PrivilegedOperation.uninstallCommandLineTool
             try await coordinator.performXPCOperation(connection: connection, operation: operation)
@@ -98,7 +93,7 @@ final class PrivilegedHelperCoordinator {
     }
 
     func withPrivilegedSession<T>(
-        prompt: String = String(localized: "\(Bundle.main.appName) is trying to make changes."),
+        prompt: String,
         _ body: (PrivilegedSession) async throws -> T
     ) async throws -> T {
         let helperURL = try helperExecutableURL()
@@ -107,8 +102,8 @@ final class PrivilegedHelperCoordinator {
         let createStatus = AuthorizationCreate(nil, nil, [], &authRef)
 
         guard createStatus == errAuthorizationSuccess, let authRef else {
-            throw operationFailed(
-                "Could not request administrator authorization: \(authorizationErrorMessage(for: createStatus))"
+            throw PrivilegedHelperCoordinatorError(
+                message: "Could not request administrator authorization: \(authorizationErrorMessage(for: createStatus))"
             )
         }
 
@@ -164,26 +159,26 @@ final class PrivilegedHelperCoordinator {
 
             connection.interruptionHandler = {
                 self.log.warn("Privileged helper \(operation.name) interrupted during shared session")
-                finish(.failure(self.operationFailed("Privileged helper \(operation.name) interrupted")))
+                finish(.failure(PrivilegedHelperCoordinatorError(message: "Privileged helper \(operation.name) interrupted")))
             }
             connection.invalidationHandler = {
                 self.log.warn("Privileged helper \(operation.name) invalidated during shared session")
-                finish(.failure(self.operationFailed("Privileged helper \(operation.name) invalidated")))
+                finish(.failure(PrivilegedHelperCoordinatorError(message: "Privileged helper \(operation.name) invalidated")))
             }
 
             guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
                 self.log.warn("Privileged helper \(operation.name) transport failed during shared session: \(error.localizedDescription)")
-                finish(.failure(self.operationFailed("Privileged helper \(operation.name) transport failed: \(error.localizedDescription)")))
+                finish(.failure(PrivilegedHelperCoordinatorError(message: "Privileged helper \(operation.name) transport failed: \(error.localizedDescription)")))
             }) as? PrivilegedHelperProtocol else {
                 self.log.warn("Failed to connect to privileged helper for \(operation.name)")
-                finish(.failure(self.operationFailed("Failed to connect to privileged helper")))
+                finish(.failure(PrivilegedHelperCoordinatorError(message: "Failed to connect to privileged helper")))
                 return
             }
 
             // NSXPC reports remote failures via callbacks; direct throwing proxy calls can raise uncaught Objective-C exceptions.
             operation.invoke(on: proxy) { error in
                 if let error {
-                    finish(.failure(self.operationFailed(error.localizedDescription)))
+                    finish(.failure(PrivilegedHelperCoordinatorError(message: error.localizedDescription)))
                 } else {
                     finish(.success(()))
                 }
@@ -197,7 +192,7 @@ final class PrivilegedHelperCoordinator {
                 }
 
                 self.log.warn("Privileged helper \(operation.name) timed out during shared session")
-                finish(.failure(self.operationFailed("Privileged helper \(operation.name) timed out")))
+                finish(.failure(PrivilegedHelperCoordinatorError(message: "Privileged helper \(operation.name) timed out")))
             }
         }
     }
@@ -211,11 +206,11 @@ final class PrivilegedHelperCoordinator {
         let helperPath = canonicalHelperURL.path
 
         guard fileManager.fileExists(atPath: helperPath) else {
-            throw operationFailed("Privileged helper executable was not found at \(helperPath)")
+            throw PrivilegedHelperCoordinatorError(message: "Privileged helper executable was not found at \(helperPath)")
         }
 
         guard fileManager.isExecutableFile(atPath: helperPath) else {
-            throw operationFailed("Privileged helper executable is not executable at \(helperPath)")
+            throw PrivilegedHelperCoordinatorError(message: "Privileged helper executable is not executable at \(helperPath)")
         }
 
         return canonicalHelperURL
@@ -285,8 +280,8 @@ final class PrivilegedHelperCoordinator {
                 throw CancellationError()
             }
 
-            throw operationFailed(
-                "Authorization rights request failed: \(authorizationErrorMessage(for: rightsStatus))"
+            throw PrivilegedHelperCoordinatorError(
+                message: "Authorization rights request failed: \(authorizationErrorMessage(for: rightsStatus))"
             )
         }
 
@@ -323,7 +318,7 @@ final class PrivilegedHelperCoordinator {
 
         guard success else {
             let details = error?.takeRetainedValue().localizedDescription ?? "Unknown privileged submission failure"
-            throw operationFailed("Privileged helper submission failed: \(details)")
+            throw PrivilegedHelperCoordinatorError(message: "Privileged helper submission failed: \(details)")
         }
     }
 
@@ -356,10 +351,6 @@ final class PrivilegedHelperCoordinator {
 
         return "OSStatus \(status)"
     }
-
-    private func operationFailed(_ message: String) -> Error {
-        PrivilegedHelperCoordinatorError(message: message)
-    }
 }
 
 private enum PrivilegedOperation {
@@ -367,7 +358,6 @@ private enum PrivilegedOperation {
     case restore(rollbackID: String)
     case removeCurrentBundle
     case installCommandLineTool
-    case reinstallCommandLineTool
     case uninstallCommandLineTool
 
     var name: String {
@@ -380,8 +370,6 @@ private enum PrivilegedOperation {
             "remove current bundle"
         case .installCommandLineTool:
             "install command-line tool"
-        case .reinstallCommandLineTool:
-            "reinstall command-line tool"
         case .uninstallCommandLineTool:
             "uninstall command-line tool"
         }
@@ -398,8 +386,6 @@ private enum PrivilegedOperation {
             proxy.removeCurrentBundle(withReply: reply)
         case .installCommandLineTool:
             proxy.installCommandLineTool(withReply: reply)
-        case .reinstallCommandLineTool:
-            proxy.reinstallCommandLineTool(withReply: reply)
         case .uninstallCommandLineTool:
             proxy.uninstallCommandLineTool(withReply: reply)
         }

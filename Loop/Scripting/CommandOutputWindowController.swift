@@ -15,68 +15,37 @@ final class CommandOutputWindowController: NSWindowController, NSWindowDelegate,
         static let copy = NSToolbarItem.Identifier("LoopCommandOutputCopy")
     }
 
+    private let title: String
     private let text: LoopAutomationText
     private let json: String
-    private let onClose: () -> ()
+    private let onClose: (CommandOutputWindowController) -> ()
 
-    private let textView: NSTextView
+    private weak var textView: NSTextView?
     private var showsJSON = false
 
     private var output: String {
         showsJSON ? json : text.plainText
     }
 
-    init(title: String, text: LoopAutomationText, json: String, onClose: @escaping () -> ()) {
+    init(title: String, text: LoopAutomationText, json: String, onClose: @escaping (CommandOutputWindowController) -> ()) {
+        self.title = title
         self.text = text
         self.json = json
         self.onClose = onClose
+        super.init(window: nil)
+    }
 
-        let scrollView = NSScrollView()
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = false
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
-        let textView = NSTextView(frame: .zero)
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isRichText = false
-        textView.allowsUndo = false
-        textView.usesFindBar = true
-        textView.drawsBackground = false
-        textView.textStorage?.setAttributedString(Self.attributedString(for: text))
-        textView.textContainerInset = NSSize(width: 12, height: 12)
-        textView.minSize = .zero
-        textView.maxSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.textContainer?.containerSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.heightTracksTextView = false
+    /// AppKit only loads the window, and cascades it from the previous one, when there's a nib name
+    override var windowNibName: NSNib.Name? {
+        "CommandOutputWindow"
+    }
 
-        scrollView.documentView = textView
-        self.textView = textView
-
-        let contentView = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 720, height: 560))
-        contentView.material = .popover
-        contentView.blendingMode = .behindWindow
-        contentView.state = .active
-        contentView.addSubview(scrollView)
-        NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
-        ])
-
+    override func loadWindow() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
             styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
@@ -86,39 +55,61 @@ final class CommandOutputWindowController: NSWindowController, NSWindowDelegate,
         window.title = title
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.toolbar = makeToolbar()
+
+        let contentView = NSVisualEffectView()
+        contentView.material = .popover
+        contentView.blendingMode = .behindWindow
+        contentView.state = .active
         window.contentView = contentView
 
-        super.init(window: window)
+        let scrollView = NSTextView.scrollableTextView()
+        scrollView.frame = contentView.bounds
+        scrollView.autoresizingMask = [.width, .height]
+        scrollView.drawsBackground = false
+        contentView.addSubview(scrollView)
 
-        self.window?.delegate = self
-        self.window?.toolbar = makeToolbar()
-    }
+        if let textView = scrollView.documentView as? NSTextView {
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.isRichText = false
+            textView.usesFindBar = true
+            textView.drawsBackground = false
+            textView.textContainerInset = NSSize(width: 12, height: 12)
+            textView.textStorage?.setAttributedString(Self.attributedString(for: text))
+            self.textView = textView
+        }
 
-    @available(*, unavailable)
-    required init?(coder _: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+        // center() uses the window's current screen, so move it to the one with the cursor first
+        if let screen = NSScreen.screenWithMouse {
+            window.setFrameOrigin(screen.visibleFrame.origin)
+        }
+        window.center()
+
+        self.window = window
     }
 
     func show() {
-        showWindow(self)
-        window?.makeKeyAndOrderFront(nil)
-        window?.orderFrontRegardless()
-
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
             NSApp.activate(ignoringOtherApps: true)
         }
+
+        showWindow(nil)
+        // Activation is only a request since macOS 14, so the window has to come forward even if it's declined
+        window?.orderFrontRegardless()
     }
 
     func windowWillClose(_: Notification) {
-        onClose()
+        onClose(self)
     }
 
     @objc private func changeFormat(_ sender: NSToolbarItemGroup) {
         showsJSON = sender.selectedIndex == 1
         let content = showsJSON ? LoopAutomationText(json) : text
-        textView.textStorage?.setAttributedString(Self.attributedString(for: content))
+        textView?.textStorage?.setAttributedString(Self.attributedString(for: content))
     }
 
     private static func attributedString(for text: LoopAutomationText) -> NSAttributedString {

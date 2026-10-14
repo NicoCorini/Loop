@@ -12,8 +12,7 @@ enum PrivilegedHelperError: LocalizedError {
     case ownershipChangeFailed(url: URL, code: Int32)
     case pathValidationFailed(operation: String, path: String, reason: String)
     case bundleValidationFailed(path: String, reason: String)
-    case commandLineToolInstallFailed(reason: String)
-    case commandLineToolUninstallFailed(reason: String)
+    case commandLineToolFailed(reason: String)
 
     var errorDescription: String? {
         switch self {
@@ -26,7 +25,7 @@ enum PrivilegedHelperError: LocalizedError {
             return "Rejected privileged \(operation) path \(path): \(reason)"
         case let .bundleValidationFailed(path, reason):
             return "Rejected privileged bundle at \(path): \(reason)"
-        case let .commandLineToolInstallFailed(reason), let .commandLineToolUninstallFailed(reason):
+        case let .commandLineToolFailed(reason):
             return reason
         }
     }

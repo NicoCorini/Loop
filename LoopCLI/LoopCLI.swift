@@ -43,31 +43,33 @@ struct LoopCLICommand: ParsableCommand {
 // MARK: - Request commands
 
 protocol CLIRequestCommand: ParsableCommand {
-    var outputMode: OutputOptions.Mode { get }
-    func makeRequest() throws -> CLIRequest
+    var outputOptions: OutputOptions { get }
+    func makeRequest() -> CLIRequest
 }
 
 extension CLIRequestCommand {
     func run() throws {
-        let formatter = CLIOutputFormatter(executableName: LoopCLICommand.executableName)
-        let printsJSON = outputMode == .json
-
         let response: CLIResponse
         do {
             response = try LoopSocketClient().send(makeRequest())
         } catch {
-            guard printsJSON else { throw error }
-            print(CLIResponse.encodedFailure(message: error.localizedDescription))
+            guard outputOptions.json else { throw error }
+            print(LoopAutomationJSON.encodedFailure(message: error.localizedDescription))
             throw ExitCode.failure
         }
 
-        guard response.isSuccess else {
-            guard printsJSON else { throw formatter.error(from: response) }
+        if outputOptions.json {
             print(response.rawOutput)
-            throw ExitCode.failure
+            if !response.isSuccess { throw ExitCode.failure }
+            return
         }
 
-        print(formatter.format(response, mode: outputMode))
+        let formatter = CLIOutputFormatter(executableName: LoopCLICommand.executableName)
+        guard response.isSuccess else {
+            throw formatter.error(from: response)
+        }
+
+        print(formatter.format(response))
     }
 }
 
@@ -76,15 +78,6 @@ extension CLIRequestCommand {
 struct OutputOptions: ParsableArguments {
     @Flag(name: .customLong("json"), help: "Print raw JSON instead of human-readable text")
     var json = false
-
-    var outputMode: Mode {
-        json ? .json : .human
-    }
-
-    enum Mode {
-        case human
-        case json
-    }
 }
 
 struct TargetOptions: ParsableArguments {

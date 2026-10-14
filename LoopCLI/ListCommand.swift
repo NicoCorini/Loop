@@ -16,44 +16,33 @@ struct ListCommand: ParsableCommand, CLIRequestCommand {
     @Argument(help: "What to list")
     var subject: ListSubject
 
-    @Flag(name: .customLong("preset"), help: "List only preset actions")
-    var presetOnly = false
-
-    @Flag(name: .customLong("custom"), help: "List only custom actions")
-    var customOnly = false
+    @Flag
+    var filter: ActionFilter?
 
     @OptionGroup
     var outputOptions: OutputOptions
 
-    var outputMode: OutputOptions.Mode {
-        outputOptions.outputMode
-    }
-
     func validate() throws {
-        if presetOnly, customOnly {
-            throw ValidationError("--preset and --custom are mutually exclusive")
-        }
-
-        if subject != .actions, presetOnly || customOnly {
+        if subject != .actions, filter != nil {
             throw ValidationError("--preset and --custom are only valid with `list actions`")
         }
     }
 
-    func makeRequest() throws -> CLIRequest {
-        let routeComponents: [String] = switch subject {
+    func makeRequest() -> CLIRequest {
+        let route: LoopRoute = switch subject {
         case .windows:
-            ["list", "windows"]
+            .listWindows
         case .screens:
-            ["list", "screens"]
-        case .actions where presetOnly:
-            ["list", "actions", "preset"]
-        case .actions where customOnly:
-            ["list", "actions", "custom"]
+            .listScreens
         case .actions:
-            ["list", "actions"]
+            switch filter {
+            case .preset: .listActions(.presetOnly)
+            case .custom: .listActions(.customOnly)
+            case nil: .listActions(.all)
+            }
         }
 
-        return CLIRequest(routeComponents: routeComponents)
+        return CLIRequest(route: route)
     }
 }
 
@@ -61,4 +50,16 @@ enum ListSubject: String, CaseIterable, ExpressibleByArgument {
     case windows
     case screens
     case actions
+}
+
+enum ActionFilter: String, EnumerableFlag {
+    case preset
+    case custom
+
+    static func help(for value: ActionFilter) -> ArgumentHelp? {
+        switch value {
+        case .preset: "List only preset actions"
+        case .custom: "List only custom actions"
+        }
+    }
 }

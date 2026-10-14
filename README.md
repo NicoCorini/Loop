@@ -158,7 +158,7 @@ open "loop://list/actions/preset"  # List preset actions
 open "loop://list/actions/custom"  # List custom actions
 ```
 
-For use in scripts and the terminal, install the command-line tool from Loop's Advanced settings. This creates `/usr/local/bin/loop`, which points to the `loop-cli` tool inside Loop:
+For use in scripts and the terminal, install the `loop` command from Loop's Advanced settings:
 
 ```bash
 loop list windows

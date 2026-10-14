@@ -57,35 +57,28 @@ final class LoopCommandHandler {
     }
 
     struct CommandExecutionResult {
-        let source: InvocationSource
-        let kind: CommandKind
-        let title: String
+        fileprivate enum Presentation {
+            case output(title: String, text: LoopAutomationText)
+            case failureAlert(message: String)
+        }
+
         let jsonResponse: String
-        let readableResponse: LoopAutomationText
-        let isSuccess: Bool
-        let errorMessage: String?
+        /// Only built for the URL scheme, since the CLI only reads `jsonResponse`
+        fileprivate let presentation: Presentation?
 
         @MainActor
         func presentIfNeeded() {
-            guard source == .urlScheme else {
-                return
-            }
-
-            switch kind {
-            case .read:
+            switch presentation {
+            case let .output(title, text):
                 CommandOutputWindowManager.shared.show(
                     title: title,
-                    text: readableResponse,
+                    text: text,
                     json: jsonResponse
                 )
-            case .write:
-                guard !isSuccess else {
-                    return
-                }
-
+            case let .failureAlert(message):
                 let alert = NSAlert()
                 alert.messageText = String(localized: "The command couldn’t be run.")
-                alert.informativeText = errorMessage ?? jsonResponse
+                alert.informativeText = message
                 alert.alertStyle = .warning
 
                 let button = alert.addButton(withTitle: String(localized: "OK"))
@@ -104,35 +97,10 @@ final class LoopCommandHandler {
                 } else {
                     alert.runModal()
                 }
+            case nil:
+                return
             }
         }
-    }
-
-    private enum ListActionFilter: Equatable {
-        case all
-        case presetOnly
-        case customOnly
-
-        var automationFilter: LoopActionListFilter {
-            switch self {
-            case .all:
-                .all
-            case .presetOnly:
-                .presetOnly
-            case .customOnly:
-                .customOnly
-            }
-        }
-    }
-
-    private enum ResponseResult<Value> {
-        case success(Value)
-        case failure(LoopAutomationResponse)
-    }
-
-    private enum MessageResult<Value> {
-        case success(Value)
-        case failure(String)
     }
 
     /// Parameters parsed from URL query string / CLI flags for targeting specific windows and screens.
@@ -142,122 +110,47 @@ final class LoopCommandHandler {
         var screenID: CGDirectDisplayID?
     }
 
-    private struct PresetActionDescriptor {
-        let direction: WindowDirection
-        let name: String
-        let title: String
-
-        var urlPath: String {
-            "exec/preset/\(name)"
-        }
-    }
-
-    private struct CustomActionDescriptor {
+    private struct ActionDescriptor {
         let action: WindowAction
-        let id: UUID
+        let kind: LoopActionKind
         let name: String
         let title: String
 
-        var idString: String {
-            id.uuidString.lowercased()
-        }
+        var publicDescriptor: LoopActionDescriptor {
+            // Preset actions are rebuilt for every request, so only custom actions have stable IDs
+            let id = kind == .custom ? action.id : nil
 
-        var urlPath: String {
-            "exec/custom/\(name)"
-        }
-
-        var idPath: String {
-            "exec/id/\(idString)"
-        }
-    }
-
-    private enum ExecutableActionDescriptor {
-        case preset(PresetActionDescriptor)
-        case custom(CustomActionDescriptor)
-
-        var id: UUID? {
-            switch self {
-            case .preset:
-                nil
-            case let .custom(descriptor):
-                descriptor.id
-            }
-        }
-
-        var name: String {
-            switch self {
-            case let .preset(descriptor):
-                descriptor.name
-            case let .custom(descriptor):
-                descriptor.name
-            }
-        }
-
-        var title: String {
-            switch self {
-            case let .preset(descriptor):
-                descriptor.title
-            case let .custom(descriptor):
-                descriptor.title
-            }
-        }
-
-        var actionKind: LoopActionKind {
-            switch self {
-            case .preset:
-                .preset
-            case .custom:
-                .custom
-            }
-        }
-
-        var urlPath: String {
-            switch self {
-            case let .preset(descriptor):
-                descriptor.urlPath
-            case let .custom(descriptor):
-                descriptor.urlPath
-            }
-        }
-
-        var idPath: String? {
-            switch self {
-            case .preset:
-                nil
-            case let .custom(descriptor):
-                descriptor.idPath
-            }
-        }
-
-        var windowAction: WindowAction {
-            switch self {
-            case let .preset(descriptor):
-                WindowAction(descriptor.direction)
-            case let .custom(descriptor):
-                descriptor.action
-            }
+            return LoopActionDescriptor(
+                id: id,
+                kind: kind,
+                title: title,
+                name: name,
+                route: LoopRoute.exec(kind, name: name).displayString,
+                idRoute: id.map { LoopRoute.execID($0.uuidString.lowercased()).displayString }
+            )
         }
     }
 
     // MARK: - Constants
 
-    private static let commandTimeout: Duration = .seconds(10)
-
-    private static let presetCategories: [(String, [WindowDirection])] = [
-        ("General", WindowDirection.general),
-        ("Halves", WindowDirection.halves),
-        ("Quarters", WindowDirection.quarters),
-        ("Horizontal Thirds", WindowDirection.horizontalThirds),
-        ("Horizontal Fourths", WindowDirection.horizontalFourths),
-        ("Vertical Thirds", WindowDirection.verticalThirds),
-        ("Screen Switching", WindowDirection.screenSwitching),
-        ("Size Adjustment", WindowDirection.sizeAdjustment),
-        ("Shrink", WindowDirection.shrink),
-        ("Grow", WindowDirection.grow),
-        ("Move", WindowDirection.move),
-        ("Focus", WindowDirection.focus),
-        ("Other", [.initialFrame, .undo])
+    private static let listRoutes: [LoopRoute] = [
+        .listWindows,
+        .listScreens,
+        .listActions(.all),
+        .listActions(.presetOnly),
+        .listActions(.customOnly)
     ]
+
+    private static let exampleExecRoutes: [LoopRoute] = [
+        .exec(.preset, name: "right_half"),
+        .exec(.preset, name: "maximize"),
+        .exec(.preset, name: "next_screen"),
+        .exec(.custom, name: "my_layout"),
+        .execID("<uuid>")
+    ]
+
+    /// How long to wait for an app launched by bundle ID to show a window
+    private static let launchedAppWindowTimeout: Duration = .seconds(3)
 
     // MARK: - Public Methods
 
@@ -266,7 +159,7 @@ final class LoopCommandHandler {
     func handle(_ url: URL, source: InvocationSource = .urlScheme) async -> CommandExecutionResult {
         log.info("Processing request: \(url.absoluteString)")
 
-        let result = await withTimeout(Self.commandTimeout) {
+        let result = await withTimeout(LoopAutomationJSON.commandTimeout) {
             await self.process(url, source: source)
         }
 
@@ -331,11 +224,16 @@ final class LoopCommandHandler {
                 await race.finish(with: operation())
             }
 
-            Task {
+            let timer = Task {
                 try? await Task.sleep(for: timeout)
                 if race.finish(with: nil) {
                     work.cancel()
                 }
+            }
+
+            Task {
+                _ = await work.value
+                timer.cancel()
             }
         }
     }
@@ -356,122 +254,92 @@ final class LoopCommandHandler {
             )
         }
 
-        guard let commandString = components.first?.lowercased() else {
-            return makeExecutionResult(
-                source: source,
-                kind: .write,
-                components: components,
-                response: unknownCommandResponse(nil)
-            )
+        let response: LoopAutomationResponse = if let route = LoopRoute(components: components) {
+            await self.response(for: route, params: params)
+        } else {
+            invalidRouteResponse(components)
         }
 
-        let parameters = Array(components.dropFirst())
+        return makeExecutionResult(
+            source: source,
+            kind: components.first?.lowercased() == "list" ? .read : .write,
+            components: components,
+            response: response
+        )
+    }
 
-        switch commandString {
-        case "list":
-            return makeExecutionResult(
-                source: source,
-                kind: .read,
-                components: components,
-                response: handleListCommand(parameters)
-            )
+    private func response(for route: LoopRoute, params: TargetParams) async -> LoopAutomationResponse {
+        switch route {
+        case .listWindows:
+            return buildWindowListResponse()
 
-        case "exec":
-            return await makeExecutionResult(
-                source: source,
-                kind: .write,
-                components: components,
-                response: handleExecCommand(parameters, params: params)
-            )
+        case .listScreens:
+            return buildScreenListResponse()
 
-        case "preset", "custom", "id":
-            return makeExecutionResult(
-                source: source,
-                kind: .write,
-                components: components,
-                response: failureResponse(
-                    message: "Unknown command: \(commandString)",
-                    replacementRoute: urlCommandString(["exec"] + components)
+        case let .listActions(filter):
+            return buildActionsResponse(filter: filter)
+
+        case let .exec(.preset, name):
+            guard let descriptor = presetActionDescriptor(name: name) else {
+                return failureResponse(
+                    message: "Unknown preset action: \(name)",
+                    replacementRoute: .listActions(.presetOnly)
                 )
-            )
+            }
 
-        default:
-            return makeExecutionResult(
-                source: source,
-                kind: .write,
-                components: components,
-                response: unknownCommandResponse(commandString)
-            )
+            return await executeAction(descriptor, params: params)
+
+        case let .exec(.custom, name):
+            let slug = slugifyDisplayString(name)
+            guard let descriptor = customActionDescriptors().first(where: { $0.name == slug }) else {
+                return failureResponse(
+                    message: "Unknown custom action: \(name)",
+                    replacementRoute: .listActions(.customOnly)
+                )
+            }
+
+            return await executeAction(descriptor, params: params)
+
+        case let .execID(token):
+            guard let identifier = UUID(uuidString: token) else {
+                return failureResponse(
+                    message: "Invalid UUID: \(token)",
+                    replacementRoute: .listActions(.all)
+                )
+            }
+
+            guard let descriptor = customActionDescriptors().first(where: { $0.action.id == identifier }) else {
+                return failureResponse(
+                    message: "Unknown action ID: \(token)",
+                    replacementRoute: .listActions(.all)
+                )
+            }
+
+            return await executeAction(descriptor, params: params)
         }
     }
 
     // MARK: - List Commands
 
-    private func handleListCommand(_ parameters: [String]) -> LoopAutomationResponse {
-        guard let type = parameters.first?.lowercased() else {
-            return invalidListRootResponse()
+    private func buildActionsResponse(filter: LoopActionListFilter) -> LoopAutomationResponse {
+        let presetCategories: [LoopActionCategory] = filter == .customOnly ? [] : presetSections().map { section in
+            LoopActionCategory(
+                name: section.title,
+                actions: section.items.map { presetActionDescriptor(for: $0).publicDescriptor }
+            )
         }
 
-        switch type {
-        case "windows":
-            guard parameters.count == 1 else {
-                return invalidListRouteResponse(parameters)
-            }
-            return buildWindowListResponse()
+        let customActions: [LoopActionDescriptor] = filter == .presetOnly ? [] : customActionDescriptors().map(\.publicDescriptor)
 
-        case "screens":
-            guard parameters.count == 1 else {
-                return invalidListRouteResponse(parameters)
-            }
-            return buildScreenListResponse()
-
-        case "actions":
-            switch parseListActionFilter(parameters) {
-            case let .success(filter):
-                return buildActionsResponse(filter: filter)
-            case let .failure(error):
-                return error
-            }
-
-        default:
-            return invalidListRouteResponse(parameters)
-        }
-    }
-
-    private func parseListActionFilter(_ parameters: [String]) -> ResponseResult<ListActionFilter> {
-        let tail = Array(parameters.dropFirst())
-
-        guard tail.count <= 1 else {
-            return .failure(invalidListRouteResponse(parameters))
-        }
-
-        guard let subtype = tail.first?.lowercased() else {
-            return .success(.all)
-        }
-
-        switch subtype {
-        case "preset":
-            return .success(.presetOnly)
-        case "custom":
-            return .success(.customOnly)
-        default:
-            return .failure(invalidListRouteResponse(parameters))
-        }
-    }
-
-    private func buildActionsResponse(filter: ListActionFilter) -> LoopAutomationResponse {
-        let allPresetCategories = buildPresetActionCategories()
-        let allCustomActions = customActionDescriptors().map { descriptor in
-            sharedActionDescriptor(.custom(descriptor))
-        }
-
-        let result = LoopActionListResult(
-            filter: filter.automationFilter,
-            presetCategories: filter == .customOnly ? [] : allPresetCategories,
-            customActions: filter == .presetOnly ? [] : allCustomActions
+        return LoopAutomationResponse(
+            result: .actionList(
+                LoopActionListResult(
+                    filter: filter,
+                    presetCategories: presetCategories,
+                    customActions: customActions
+                )
+            )
         )
-
-        return LoopAutomationResponse(result: .actionList(result))
     }
 
     private func buildWindowListResponse() -> LoopAutomationResponse {
@@ -508,102 +376,15 @@ final class LoopCommandHandler {
 
     // MARK: - Write Commands
 
-    private func handleExecCommand(_ parameters: [String], params: TargetParams) async -> LoopAutomationResponse {
-        let arguments = Array(parameters.dropFirst())
-
-        switch parameters.first?.lowercased() {
-        case "preset":
-            return await handlePresetCommand(arguments, params: params)
-        case "custom":
-            return await handleCustomCommand(arguments, params: params)
-        case "id":
-            return await handleIDCommand(arguments, params: params)
-        case let type:
-            return failureResponse(
-                message: type.map { "Unknown action type: \($0)" } ?? "No action type given",
-                availableRoutes: publicWriteRoutes()
-            )
-        }
-    }
-
-    private func handlePresetCommand(_ parameters: [String], params: TargetParams) async -> LoopAutomationResponse {
-        guard parameters.count == 1 else {
-            return failureResponse(
-                message: "Running a preset action requires exactly one name",
-                replacementRoute: urlCommandString(["list", "actions", "preset"])
-            )
-        }
-
-        let token = parameters[0]
-        guard let descriptor = presetActionDescriptor(name: token) else {
-            return failureResponse(
-                message: "Unknown preset action: \(token)",
-                replacementRoute: urlCommandString(["list", "actions", "preset"])
-            )
-        }
-
-        return await executeAction(.preset(descriptor), params: params)
-    }
-
-    private func handleCustomCommand(_ parameters: [String], params: TargetParams) async -> LoopAutomationResponse {
-        guard parameters.count == 1 else {
-            return failureResponse(
-                message: "Running a custom action requires exactly one name",
-                replacementRoute: urlCommandString(["list", "actions", "custom"])
-            )
-        }
-
-        let token = parameters[0]
-        guard let descriptor = customActionDescriptor(name: token) else {
-            return failureResponse(
-                message: "Unknown custom action: \(token)",
-                replacementRoute: urlCommandString(["list", "actions", "custom"])
-            )
-        }
-
-        return await executeAction(.custom(descriptor), params: params)
-    }
-
-    private func handleIDCommand(_ parameters: [String], params: TargetParams) async -> LoopAutomationResponse {
-        guard parameters.count == 1 else {
-            return failureResponse(
-                message: "Running an action by ID requires exactly one UUID",
-                replacementRoute: urlCommandString(["list", "actions"])
-            )
-        }
-
-        let token = parameters[0]
-        guard let identifier = UUID(uuidString: token) else {
-            return failureResponse(
-                message: "Invalid UUID: \(token)",
-                replacementRoute: urlCommandString(["list", "actions"])
-            )
-        }
-
-        guard let descriptor = executableActionDescriptor(id: identifier) else {
-            return failureResponse(
-                message: "Unknown action ID: \(token)",
-                replacementRoute: urlCommandString(["list", "actions"])
-            )
-        }
-
-        return await executeAction(descriptor, params: params)
-    }
-
     private func executeAction(
-        _ descriptor: ExecutableActionDescriptor,
+        _ descriptor: ActionDescriptor,
         params: TargetParams
     ) async -> LoopAutomationResponse {
-        let action = descriptor.windowAction
         let resolvedWindow = await resolveWindow(params: params)
-        let latestRecord: WindowAction? = if let resolvedWindow {
-            await WindowRecords.shared.getCurrentAction(for: resolvedWindow)
-        } else {
-            nil
-        }
-        let resolvedAction = resolveActionForCommandExecution(action, latestRecord: latestRecord)
 
-        if resolvedAction.direction.isNoOp || resolvedAction.direction == .cycle {
+        guard let resolvedAction = await resolveCycle(descriptor.action, for: resolvedWindow),
+              !resolvedAction.direction.isNoOp
+        else {
             return failureResponse(message: "Can’t run this action: \(descriptor.name)")
         }
 
@@ -616,7 +397,7 @@ final class LoopCommandHandler {
         case let .success(screen):
             targetScreen = screen
         case let .failure(error):
-            return failureResponse(message: error)
+            return LoopAutomationResponse(error: error)
         }
 
         do {
@@ -628,8 +409,8 @@ final class LoopCommandHandler {
         return LoopAutomationResponse(
             result: .execution(
                 LoopExecutionResult(
-                    action: sharedActionDescriptor(descriptor),
-                    targetWindow: resolvedWindow.map(executionTargetWindowSummary)
+                    action: descriptor.publicDescriptor,
+                    targetWindow: resolvedWindow.map(windowSummary)
                 )
             )
         )
@@ -637,44 +418,33 @@ final class LoopCommandHandler {
 
     // MARK: - Action Catalog
 
-    private func buildPresetActionCategories() -> [LoopActionCategory] {
-        Self.presetCategories.map { category, directions in
-            LoopActionCategory(
-                name: category,
-                actions: directions.map { direction in
-                    sharedActionDescriptor(.preset(presetActionDescriptor(for: direction)))
-                }
-            )
+    /// The Keybinds tab's action picker, minus actions that have to be configured first, like stash
+    private func presetSections() -> [PickerSection<WindowDirection>] {
+        PickerSection.windowDirections.compactMap { section in
+            let items = section.items.filter { !$0.isCustomizable }
+            return items.isEmpty ? nil : PickerSection(section.title, items)
         }
     }
 
-    private func allPresetActionDescriptors() -> [PresetActionDescriptor] {
-        Self.presetCategories.flatMap { _, directions in
-            directions.map { direction in
-                PresetActionDescriptor(
-                    direction: direction,
-                    name: canonicalDirectionName(for: direction),
-                    title: direction.name
-                )
-            }
-        }
-    }
-
-    private func presetActionDescriptor(for direction: WindowDirection) -> PresetActionDescriptor {
-        PresetActionDescriptor(
-            direction: direction,
+    private func presetActionDescriptor(for direction: WindowDirection) -> ActionDescriptor {
+        ActionDescriptor(
+            action: WindowAction(direction),
+            kind: .preset,
             name: canonicalDirectionName(for: direction),
             title: direction.name
         )
     }
 
     /// Accepts the listed name or its display name, e.g. `right_half` or "Right Half"
-    private func presetActionDescriptor(name: String) -> PresetActionDescriptor? {
+    private func presetActionDescriptor(name: String) -> ActionDescriptor? {
         let slug = slugifyDisplayString(name)
-        return allPresetActionDescriptors().first { $0.name == slug }
+        return presetSections()
+            .flatMap(\.items)
+            .first { canonicalDirectionName(for: $0) == slug }
+            .map(presetActionDescriptor(for:))
     }
 
-    private func customActionDescriptors() -> [CustomActionDescriptor] {
+    private func customActionDescriptors() -> [ActionDescriptor] {
         let candidates: [(WindowAction, String, String)] = Defaults[.keybinds].compactMap { action in
             guard
                 !action.keybind.isEmpty,
@@ -700,105 +470,89 @@ final class LoopCommandHandler {
                 baseName
             }
 
-            return CustomActionDescriptor(
+            return ActionDescriptor(
                 action: action,
-                id: action.id,
+                kind: .custom,
                 name: finalName,
                 title: displayName
             )
         }
     }
 
-    private func customActionDescriptor(name: String) -> CustomActionDescriptor? {
-        let slug = slugifyDisplayString(name)
-        return customActionDescriptors().first { $0.name == slug }
-    }
-
-    private func customActionDescriptor(id: UUID) -> CustomActionDescriptor? {
-        customActionDescriptors().first { $0.id == id }
-    }
-
-    private func executableActionDescriptor(id: UUID) -> ExecutableActionDescriptor? {
-        if let descriptor = customActionDescriptor(id: id) {
-            return .custom(descriptor)
-        }
-
-        return nil
-    }
-
     // MARK: - Response Helpers
 
-    private func publicRoutes() -> [String] {
-        publicListRoutes() + publicWriteRoutes()
+    /// Explains why `components` isn't a valid route
+    private func invalidRouteResponse(_ components: [String]) -> LoopAutomationResponse {
+        guard let command = components.first?.lowercased() else {
+            return failureResponse(
+                message: "No command given",
+                availableRoutes: Self.listRoutes + Self.exampleExecRoutes
+            )
+        }
+
+        let arguments = Array(components.dropFirst())
+
+        switch command {
+        case "list":
+            return failureResponse(
+                message: arguments.isEmpty ? "No list type given" : "Unknown list type: \(arguments.joined(separator: "/"))",
+                availableRoutes: Self.listRoutes
+            )
+
+        case "exec":
+            return invalidExecRouteResponse(arguments)
+
+        case "preset", "custom", "id":
+            return failureResponse(
+                message: "Unknown command: \(command)",
+                replacementRoute: LoopRoute(components: ["exec"] + components)
+            )
+
+        default:
+            return failureResponse(
+                message: "Unknown command: \(command)",
+                availableRoutes: Self.listRoutes + Self.exampleExecRoutes
+            )
+        }
     }
 
-    private func publicListRoutes() -> [String] {
-        [
-            urlCommandString(["list", "windows"]),
-            urlCommandString(["list", "screens"]),
-            urlCommandString(["list", "actions"]),
-            urlCommandString(["list", "actions", "preset"]),
-            urlCommandString(["list", "actions", "custom"])
-        ]
-    }
-
-    private func publicWriteRoutes() -> [String] {
-        [
-            urlCommandString(["exec", "preset", "right_half"]),
-            urlCommandString(["exec", "preset", "maximize"]),
-            urlCommandString(["exec", "preset", "next_screen"]),
-            urlCommandString(["exec", "custom", "my_layout"]),
-            urlCommandString(["exec", "id", "<uuid>"])
-        ]
-    }
-
-    private func urlCommandString(_ components: [String]) -> String {
-        "loop://\(components.joined(separator: "/"))"
+    private func invalidExecRouteResponse(_ arguments: [String]) -> LoopAutomationResponse {
+        switch arguments.first?.lowercased() {
+        case "preset":
+            failureResponse(
+                message: "Running a preset action requires exactly one name",
+                replacementRoute: .listActions(.presetOnly)
+            )
+        case "custom":
+            failureResponse(
+                message: "Running a custom action requires exactly one name",
+                replacementRoute: .listActions(.customOnly)
+            )
+        case "id":
+            failureResponse(
+                message: "Running an action by ID requires exactly one UUID",
+                replacementRoute: .listActions(.all)
+            )
+        case let type:
+            failureResponse(
+                message: type.map { "Unknown action type: \($0)" } ?? "No action type given",
+                availableRoutes: Self.exampleExecRoutes
+            )
+        }
     }
 
     private func failureResponse(
         message: String,
-        replacementRoute: String? = nil,
-        availableRoutes: [String] = []
+        replacementRoute: LoopRoute? = nil,
+        availableRoutes: [LoopRoute] = []
     ) -> LoopAutomationResponse {
         LoopAutomationResponse(
             error: LoopAutomationError(
                 message: message,
-                replacementRoute: replacementRoute,
-                availableRoutes: availableRoutes.isEmpty ? nil : availableRoutes
+                replacementRoute: replacementRoute?.displayString,
+                availableRoutes: availableRoutes.isEmpty ? nil : availableRoutes.map(\.displayString)
             )
         )
-    }
-
-    private func invalidListRootResponse() -> LoopAutomationResponse {
-        failureResponse(
-            message: "No list type given",
-            availableRoutes: publicListRoutes()
-        )
-    }
-
-    private func invalidListRouteResponse(_ parameters: [String]) -> LoopAutomationResponse {
-        failureResponse(
-            message: "Unknown list type: \(parameters.joined(separator: "/"))",
-            availableRoutes: publicListRoutes()
-        )
-    }
-
-    private func unknownCommandResponse(_ command: String?) -> LoopAutomationResponse {
-        failureResponse(
-            message: command.map { "Unknown command: \($0)" } ?? "No command given",
-            availableRoutes: publicRoutes()
-        )
-    }
-
-    // MARK: - JSON Helpers
-
-    private func jsonString(_ response: LoopAutomationResponse) -> String {
-        do {
-            return try LoopAutomationJSON.encodeString(response)
-        } catch {
-            return #"{"error":{"message":"Couldn’t encode the response"},"success":false}"#
-        }
     }
 
     private func makeExecutionResult(
@@ -807,16 +561,24 @@ final class LoopCommandHandler {
         components: [String],
         response: LoopAutomationResponse
     ) -> CommandExecutionResult {
-        CommandExecutionResult(
-            source: source,
-            kind: kind,
-            title: outputTitle(for: components),
-            jsonResponse: jsonString(response),
-            readableResponse: response.result.map { LoopAutomationFormatter().format($0) }
-                ?? LoopAutomationText(response.error?.message ?? jsonString(response)),
-            isSuccess: response.success,
-            errorMessage: response.error?.message
-        )
+        let jsonResponse = LoopAutomationJSON.encodeString(response)
+
+        guard source == .urlScheme else {
+            return CommandExecutionResult(jsonResponse: jsonResponse, presentation: nil)
+        }
+
+        let presentation: CommandExecutionResult.Presentation? = switch kind {
+        case .read:
+            .output(
+                title: outputTitle(for: components),
+                text: response.result.map { LoopAutomationFormatter().format($0) }
+                    ?? LoopAutomationText(response.error?.message ?? jsonResponse)
+            )
+        case .write:
+            response.error.map { .failureAlert(message: $0.message) }
+        }
+
+        return CommandExecutionResult(jsonResponse: jsonResponse, presentation: presentation)
     }
 
     private func outputTitle(for components: [String]) -> String {
@@ -837,33 +599,12 @@ final class LoopCommandHandler {
         )
     }
 
-    private func executionTargetWindowSummary(_ window: Window) -> LoopExecutionTargetWindow {
-        let app = window.nsRunningApplication
-        return LoopExecutionTargetWindow(
-            id: window.cgWindowID,
-            bundleID: app?.bundleIdentifier ?? "",
-            appName: app?.localizedName ?? "",
-            title: window.title ?? ""
-        )
-    }
-
     private func screenSummary(_ screen: NSScreen) -> LoopScreenSummary {
         LoopScreenSummary(
             id: screen.displayID ?? 0,
             name: screen.localizedName,
             frame: LoopRect(screen.frame),
             isMain: screen == NSScreen.main
-        )
-    }
-
-    private func sharedActionDescriptor(_ descriptor: ExecutableActionDescriptor) -> LoopActionDescriptor {
-        LoopActionDescriptor(
-            id: descriptor.id,
-            kind: descriptor.actionKind,
-            title: descriptor.title,
-            name: descriptor.name,
-            route: urlCommandString(descriptor.urlPath.split(separator: "/").map(String.init)),
-            idRoute: descriptor.idPath.map { urlCommandString($0.split(separator: "/").map(String.init)) }
         )
     }
 
@@ -918,35 +659,32 @@ final class LoopCommandHandler {
         }
     }
 
-    private func resolveActionForCommandExecution(_ action: WindowAction, latestRecord: WindowAction?) -> WindowAction {
-        var currentAction = action
-        var depth = 0
-
-        while currentAction.direction == .cycle {
-            guard depth < 8, let cycle = currentAction.cycle, !cycle.isEmpty else {
-                return currentAction
-            }
-
-            if let latestRecord,
-               let currentIndex = cycle.firstIndex(of: latestRecord) {
-                currentAction = cycle[(currentIndex + 1) % cycle.count]
-            } else {
-                currentAction = cycle[0]
-            }
-
-            depth += 1
+    /// Picks the cycle's next action the way Loop's keybinds do, continuing from the window's current action
+    private func resolveCycle(_ action: WindowAction, for window: Window?) async -> WindowAction? {
+        guard action.direction == .cycle else {
+            return action
         }
 
-        return currentAction
+        let context = ResizeContext(window: window)
+        await context.refreshResolvedState()
+
+        // Each command is its own session, so restarting would always pick the first action
+        guard let proposal = context.proposeCycleAction(
+            in: action,
+            restartAtBeginningWhenInterrupted: false,
+            mode: .advance(.forward)
+        ) else {
+            return nil
+        }
+
+        return context.commitCycleAction(proposal, in: action)
     }
 
     private func performAction(_ action: WindowAction, on window: Window?, screen: NSScreen) async throws {
-        if let app = window?.nsRunningApplication {
-            log.info("Activating application: \(app.localizedName ?? "unknown")")
-            app.activate(options: .activateIgnoringOtherApps)
+        if let window {
+            log.info("Focusing window: \(window.description)")
+            window.focus()
         }
-
-        try await Task.sleep(for: .seconds(0.1))
 
         log.info("Executing action: \(action) on \(window?.title ?? "unknown")")
         _ = try await WindowActionEngine.shared.apply(
@@ -964,42 +702,25 @@ final class LoopCommandHandler {
         for action: WindowAction,
         window: Window?,
         params: TargetParams
-    ) -> MessageResult<NSScreen> {
+    ) -> Result<NSScreen, LoopAutomationError> {
         if action.direction.willChangeScreen {
             guard let window else {
-                return .failure(windowResolveError(params))
+                return .failure(LoopAutomationError(message: windowResolveError(params)))
             }
 
             guard let currentScreen = ScreenUtility.screenContaining(window) ?? NSScreen.main else {
-                return .failure("No current screen found")
+                return .failure(LoopAutomationError(message: "No current screen found"))
             }
 
-            let targetScreen: NSScreen? = switch action.direction {
-            case .nextScreen:
-                ScreenUtility.nextScreen(from: currentScreen)
-            case .previousScreen:
-                ScreenUtility.previousScreen(from: currentScreen)
-            case .leftScreen:
-                ScreenUtility.directionalScreen(from: currentScreen, direction: .left)
-            case .rightScreen:
-                ScreenUtility.directionalScreen(from: currentScreen, direction: .right)
-            case .topScreen:
-                ScreenUtility.directionalScreen(from: currentScreen, direction: .top)
-            case .bottomScreen:
-                ScreenUtility.directionalScreen(from: currentScreen, direction: .bottom)
-            default:
-                currentScreen
-            }
-
-            guard let targetScreen else {
-                return .failure("No target screen found for \(action.direction.name)")
+            guard let targetScreen = ScreenUtility.targetScreen(for: action.direction, from: currentScreen) else {
+                return .failure(LoopAutomationError(message: "No target screen found for \(action.direction.name)"))
             }
 
             return .success(targetScreen)
         }
 
         guard let screen = resolveScreen(screenID: params.screenID) else {
-            return .failure(params.screenID.map { "No screen found with ID \($0)" } ?? "No current screen found")
+            return .failure(LoopAutomationError(message: params.screenID.map { "No screen found with ID \($0)" } ?? "No current screen found"))
         }
 
         return .success(screen)
@@ -1007,16 +728,11 @@ final class LoopCommandHandler {
 
     // MARK: - Window/Screen Helpers
 
-    /// Finds a window by its CGWindowID from the current window list.
-    private func findWindowByID(_ windowID: CGWindowID) -> Window? {
-        WindowUtility.windowList().first { $0.cgWindowID == windowID }
-    }
-
     /// Resolves the target window from targeting parameters.
     /// Priority: windowID > bundleID > frontmost window.
-    private func resolveWindow(params: TargetParams = .init()) async -> Window? {
+    private func resolveWindow(params: TargetParams) async -> Window? {
         if let windowID = params.windowID {
-            return findWindowByID(windowID)
+            return try? Window.fromWindowID(windowID)
         }
         if let bundleID = params.bundleID {
             return await resolveWindowByBundleID(bundleID)
@@ -1027,8 +743,6 @@ final class LoopCommandHandler {
     /// Resolves a window by bundle ID, launching the app if needed.
     private func resolveWindowByBundleID(_ bundleID: String) async -> Window? {
         if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
-            app.activate(options: .activateIgnoringOtherApps)
-            try? await Task.sleep(for: .seconds(0.1))
             return try? Window(pid: app.processIdentifier)
         }
 
@@ -1048,15 +762,18 @@ final class LoopCommandHandler {
             return nil
         }
 
-        for _ in 0 ..< 30 {
-            do {
-                try await Task.sleep(for: .seconds(0.1))
-            } catch {
-                return nil
-            }
+        let clock = ContinuousClock()
+        let deadline = clock.now + Self.launchedAppWindowTimeout
 
+        while clock.now < deadline {
             if let window = try? Window(pid: app.processIdentifier) {
                 return window
+            }
+
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                return nil
             }
         }
 
@@ -1065,7 +782,7 @@ final class LoopCommandHandler {
     }
 
     /// Resolves a screen by display ID, falling back to the main screen.
-    private func resolveScreen(screenID: CGDirectDisplayID? = nil) -> NSScreen? {
+    private func resolveScreen(screenID: CGDirectDisplayID?) -> NSScreen? {
         if let screenID {
             return NSScreen.screens.first { $0.displayID == screenID }
         }

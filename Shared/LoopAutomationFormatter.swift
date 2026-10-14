@@ -178,13 +178,14 @@ struct LoopAutomationFormatter {
         "\(number(frame.width))×\(number(frame.height)) at \(number(frame.x)),\(number(frame.y))"
     }
 
+    /// POSIX locale so CLI output doesn't change with the user's region
     private func number(_ value: CGFloat) -> String {
-        if value.rounded() == value {
-            return String(Int(value))
-        }
-
-        return String(format: "%.2f", Double(value))
-            .replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
+        Double(value).formatted(
+            .number
+                .precision(.fractionLength(0...2))
+                .grouping(.never)
+                .locale(Locale(identifier: "en_US_POSIX"))
+        )
     }
 
     /// Trimmed and flattened to one line, or `nil` when empty

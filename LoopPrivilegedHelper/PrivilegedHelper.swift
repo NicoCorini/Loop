@@ -5,7 +5,6 @@
 //  Created by Kai Azim on 2026-03-01.
 //
 
-import Darwin
 import Foundation
 import Scribe
 import Security
@@ -23,18 +22,6 @@ final class PrivilegedHelper: NSObject, PrivilegedHelperProtocol {
         let currentURL: URL
         let rollbackContainerURL: URL
         let backupBundleURL: URL
-    }
-
-    private enum ExistingFilesystemEntry {
-        case missing
-        case symbolicLink
-        case other
-    }
-
-    private enum CommandLineToolDestinationState {
-        case missing
-        case loopManaged
-        case occupied(reason: String)
     }
 
     private static let maxRollbackIDLength = 128
@@ -81,16 +68,7 @@ final class PrivilegedHelper: NSObject, PrivilegedHelperProtocol {
 
     func installCommandLineTool(withReply reply: @escaping (NSError?) -> ()) {
         do {
-            try executeInstallCommandLineTool(reinstall: false)
-            reply(nil)
-        } catch {
-            reply(Self.xpcError(error))
-        }
-    }
-
-    func reinstallCommandLineTool(withReply reply: @escaping (NSError?) -> ()) {
-        do {
-            try executeInstallCommandLineTool(reinstall: true)
+            try executeInstallCommandLineTool()
             reply(nil)
         } catch {
             reply(Self.xpcError(error))
@@ -186,36 +164,35 @@ final class PrivilegedHelper: NSObject, PrivilegedHelperProtocol {
         log.success("Removed current app bundle at \(currentBundleURL.path)")
     }
 
-    private func executeInstallCommandLineTool(reinstall: Bool) throws {
+    private func executeInstallCommandLineTool() throws {
         let sourceURL = try validatedCommandLineToolSourceURL()
         let destinationURL = PrivilegedHelperConstants.commandLineToolSymlinkURL
 
         try ensureCommandLineToolInstallDirectoryExists()
 
-        switch try commandLineToolDestinationState(at: destinationURL) {
+        switch try commandLineToolLinkState() {
         case .missing:
-            guard !reinstall else {
-                throw PrivilegedHelperError.commandLineToolInstallFailed(
-                    reason: "No command-line tool is installed at \(destinationURL.path)."
-                )
-            }
+            break
         case .loopManaged:
-            guard reinstall else {
-                throw PrivilegedHelperError.commandLineToolInstallFailed(
-                    reason: "The command-line tool is already installed at \(destinationURL.path)."
+            // Removes the link itself, never its target
+            do {
+                try fileManager.removeItem(at: destinationURL)
+            } catch {
+                throw PrivilegedHelperError.commandLineToolFailed(
+                    reason: "Couldn’t replace \(destinationURL.path): \(error.localizedDescription)"
                 )
             }
-
-            try fileManager.removeItem(at: destinationURL)
-        case let .occupied(reason):
-            throw PrivilegedHelperError.commandLineToolInstallFailed(reason: reason)
+        case .occupied:
+            throw PrivilegedHelperError.commandLineToolFailed(
+                reason: "\(destinationURL.path) is used by another app or file."
+            )
         }
 
         do {
             try fileManager.createSymbolicLink(at: destinationURL, withDestinationURL: sourceURL)
             log.success("Installed Loop CLI symlink at \(destinationURL.path) -> \(sourceURL.path)")
         } catch {
-            throw PrivilegedHelperError.commandLineToolInstallFailed(
+            throw PrivilegedHelperError.commandLineToolFailed(
                 reason: "Couldn’t create \(destinationURL.path): \(error.localizedDescription)"
             )
         }
@@ -224,7 +201,7 @@ final class PrivilegedHelper: NSObject, PrivilegedHelperProtocol {
     private func executeUninstallCommandLineTool() throws {
         let destinationURL = PrivilegedHelperConstants.commandLineToolSymlinkURL
 
-        switch try commandLineToolDestinationState(at: destinationURL) {
+        switch try commandLineToolLinkState() {
         case .missing:
             return
         case .loopManaged:
@@ -232,30 +209,38 @@ final class PrivilegedHelper: NSObject, PrivilegedHelperProtocol {
                 try fileManager.removeItem(at: destinationURL)
                 log.success("Removed Loop CLI symlink at \(destinationURL.path)")
             } catch {
-                throw PrivilegedHelperError.commandLineToolUninstallFailed(
+                throw PrivilegedHelperError.commandLineToolFailed(
                     reason: "Couldn’t remove \(destinationURL.path): \(error.localizedDescription)"
                 )
             }
-        case let .occupied(reason):
-            throw PrivilegedHelperError.commandLineToolUninstallFailed(reason: reason)
+        case .occupied:
+            throw PrivilegedHelperError.commandLineToolFailed(
+                reason: "\(destinationURL.path) is used by another app or file."
+            )
+        }
+    }
+
+    private func commandLineToolLinkState() throws -> CommandLineToolLinkState {
+        do {
+            return try PrivilegedHelperConstants.commandLineToolLinkState(fileManager: fileManager)
+        } catch {
+            throw PrivilegedHelperError.commandLineToolFailed(
+                reason: "Couldn’t inspect \(PrivilegedHelperConstants.commandLineToolSymlinkURL.path): \(error.localizedDescription)"
+            )
         }
     }
 
     private func validatedCommandLineToolSourceURL() throws -> URL {
-        let sourceURL = LoopSupportPaths.canonical(
-            context.clientBundleURL
-                .appendingPathComponent("Contents/MacOS", isDirectory: true)
-                .appendingPathComponent(PrivilegedHelperConstants.commandLineToolExecutableName, isDirectory: false)
-        )
+        let sourceURL = PrivilegedHelperConstants.commandLineToolURL(inBundle: context.clientBundleURL)
 
         guard fileManager.fileExists(atPath: sourceURL.path) else {
-            throw PrivilegedHelperError.commandLineToolInstallFailed(
+            throw PrivilegedHelperError.commandLineToolFailed(
                 reason: "This copy of Loop is missing its command-line tool at \(sourceURL.path)."
             )
         }
 
         guard fileManager.isExecutableFile(atPath: sourceURL.path) else {
-            throw PrivilegedHelperError.commandLineToolInstallFailed(
+            throw PrivilegedHelperError.commandLineToolFailed(
                 reason: "The command-line tool at \(sourceURL.path) isn’t executable."
             )
         }
@@ -265,85 +250,15 @@ final class PrivilegedHelper: NSObject, PrivilegedHelperProtocol {
 
     private func ensureCommandLineToolInstallDirectoryExists() throws {
         let installDirectoryURL = PrivilegedHelperConstants.commandLineToolInstallDirectoryURL
-        var isDirectory = ObjCBool(false)
-
-        if fileManager.fileExists(atPath: installDirectoryURL.path, isDirectory: &isDirectory) {
-            guard isDirectory.boolValue else {
-                throw PrivilegedHelperError.commandLineToolInstallFailed(
-                    reason: "\(installDirectoryURL.path) isn’t a folder."
-                )
-            }
-            return
-        }
 
         do {
+            // Succeeds if the folder already exists, and fails if a file is in the way
             try fileManager.createDirectory(at: installDirectoryURL, withIntermediateDirectories: true)
         } catch {
-            throw PrivilegedHelperError.commandLineToolInstallFailed(
+            throw PrivilegedHelperError.commandLineToolFailed(
                 reason: "Couldn’t create \(installDirectoryURL.path): \(error.localizedDescription)"
             )
         }
-    }
-
-    private func commandLineToolDestinationState(at destinationURL: URL) throws -> CommandLineToolDestinationState {
-        switch try filesystemEntry(at: destinationURL) {
-        case .missing:
-            return .missing
-        case .other:
-            return .occupied(reason: "\(destinationURL.path) is used by another app or file.")
-        case .symbolicLink:
-            let rawDestination = try symbolicLinkDestination(at: destinationURL)
-            guard isLoopManagedCommandLineToolTarget(rawDestination) else {
-                return .occupied(reason: "\(destinationURL.path) is used by another app or file.")
-            }
-            return .loopManaged
-        }
-    }
-
-    private func filesystemEntry(at url: URL) throws -> ExistingFilesystemEntry {
-        var statBuffer = stat()
-        let result = url.withUnsafeFileSystemRepresentation { path in
-            guard let path else { return -1 }
-            return Int(lstat(path, &statBuffer))
-        }
-
-        if result == 0 {
-            let fileType = statBuffer.st_mode & S_IFMT
-            return fileType == S_IFLNK ? .symbolicLink : .other
-        }
-
-        if errno == ENOENT {
-            return .missing
-        }
-
-        let errorCode = errno
-        throw PrivilegedHelperError.commandLineToolInstallFailed(
-            reason: "Could not inspect \(url.path): \(String(cString: strerror(errorCode))) (\(errorCode))"
-        )
-    }
-
-    private func symbolicLinkDestination(at url: URL) throws -> String {
-        do {
-            return try fileManager.destinationOfSymbolicLink(atPath: url.path)
-        } catch {
-            throw PrivilegedHelperError.commandLineToolInstallFailed(
-                reason: "Could not inspect symbolic link at \(url.path): \(error.localizedDescription)"
-            )
-        }
-    }
-
-    private func isLoopManagedCommandLineToolTarget(_ targetPath: String) -> Bool {
-        let standardizedTargetPath: String
-        if targetPath.hasPrefix("/") {
-            standardizedTargetPath = URL(fileURLWithPath: targetPath).standardizedFileURL.path
-        } else {
-            let baseURL = PrivilegedHelperConstants.commandLineToolInstallDirectoryURL
-            standardizedTargetPath = URL(fileURLWithPath: targetPath, relativeTo: baseURL)
-                .standardizedFileURL
-                .path
-        }
-
-        return PrivilegedHelperConstants.isLoopManagedCommandLineToolPath(standardizedTargetPath)
     }
 
     /// Derives and validates atomic swap paths from trusted connection context and rollback token.

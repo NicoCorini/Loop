@@ -18,8 +18,8 @@ struct CLIOutputFormatter {
         self.executableName = executableName
     }
 
-    func format(_ response: CLIResponse, mode: OutputOptions.Mode) -> String {
-        guard mode == .human, let result = response.result else {
+    func format(_ response: CLIResponse) -> String {
+        guard let result = response.result else {
             return response.rawOutput
         }
 
@@ -52,36 +52,7 @@ struct CLIOutputFormatter {
     }
 
     private func displayString(for route: String) -> String {
-        guard
-            let url = URL(string: route),
-            url.scheme?.lowercased() == "loop"
-        else {
-            return route
-        }
-
-        let components = (url.host.map { [$0.lowercased()] } ?? [])
-            + url.pathComponents.filter { $0 != "/" && !$0.isEmpty }
-
-        switch components {
-        case ["list", "windows"]:
-            return "\(executableName) list windows"
-        case ["list", "screens"]:
-            return "\(executableName) list screens"
-        case ["list", "actions"]:
-            return "\(executableName) list actions"
-        case ["list", "actions", "preset"]:
-            return "\(executableName) list actions --preset"
-        case ["list", "actions", "custom"]:
-            return "\(executableName) list actions --custom"
-        default:
-            break
-        }
-
-        if components.count == 3, components[0] == "exec", ["preset", "custom", "id"].contains(components[1]) {
-            return "\(executableName) exec --\(components[1]) \(components[2])"
-        }
-
-        return route
+        LoopRoute(string: route)?.commandLineInvocation(executableName: executableName) ?? route
     }
 }
 

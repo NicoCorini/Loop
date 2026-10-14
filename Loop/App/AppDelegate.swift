@@ -38,11 +38,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DataPatcher.run()
         }
 
-        // Normal user-facing launches should open Settings, but URL-driven launches need a chance
-        // to cancel that presentation when their URL event arrives immediately after startup.
+        // Show settings window only if not launched as login item AND startHidden is disabled
         if !launchedAsLoginItem, !Defaults[.startHidden] {
             scheduleSettingsWindowOpen()
         } else {
+            // Closing also hides the dock icon if needed.
             SettingsWindowManager.shared.close()
         }
 
@@ -166,28 +166,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         processIncomingURL(url)
     }
 
-    func applicationShouldOpenUntitledFile(_: NSApplication) -> Bool {
-        !launchedAsLoginItem && !Defaults[.startHidden]
-    }
-
-    func applicationOpenUntitledFile(_: NSApplication) -> Bool {
-        cancelPendingSettingsWindowOpen()
-        SettingsWindowManager.shared.show()
-        return true
-    }
-
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
         SettingsWindowManager.shared.close()
         return false
     }
 
-    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        guard !hasVisibleWindows else {
-            return false
-        }
-
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        // Returning false keeps AppKit from opening anything itself, so a URL arriving next can still cancel this
         scheduleSettingsWindowOpen()
-        return true
+        return false
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
@@ -217,6 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Deferred so a URL event arriving right after launch or reopen can cancel it
     private func scheduleSettingsWindowOpen() {
         cancelPendingSettingsWindowOpen()
 
