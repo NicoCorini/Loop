@@ -126,7 +126,6 @@ struct RadialMenuActionItemView: View {
 
                         if let info = action.direction.infoText {
                             Text(action.getName())
-                                .fontWeight(.regular)
                                 .lineLimit(1)
                                 .padding(.trailing, 4)
                                 .luminareToolTip(attachedTo: .topTrailing) {
@@ -135,7 +134,6 @@ struct RadialMenuActionItemView: View {
                                 }
                         } else {
                             Text(action.getName())
-                                .fontWeight(.regular)
                                 .lineLimit(1)
                         }
                     } else {
@@ -143,7 +141,6 @@ struct RadialMenuActionItemView: View {
                             .foregroundStyle(.secondary)
 
                         Text("Linked keybind not found")
-                            .fontWeight(.regular)
                             .lineLimit(1)
                             .foregroundStyle(.secondary)
                     }

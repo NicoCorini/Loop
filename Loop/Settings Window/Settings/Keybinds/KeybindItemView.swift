@@ -98,7 +98,6 @@ struct KeybindItemView: View {
 
                     if let info = action.direction.infoText {
                         Text(action.getName())
-                            .fontWeight(.regular)
                             .lineLimit(1)
                             .padding(.trailing, 4)
                             .luminareToolTip(attachedTo: .topTrailing) {
@@ -107,7 +106,6 @@ struct KeybindItemView: View {
                             }
                     } else {
                         Text(action.getName())
-                            .fontWeight(.regular)
                             .lineLimit(1)
                     }
                 }
