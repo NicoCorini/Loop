@@ -10,7 +10,6 @@ import SwiftUI
 
 struct GestureBinding: Identifiable, Codable, Hashable, Defaults.Serializable {
     let id: UUID
-    var name: String?
     var fingerCount: Int
     /// `nil` until the user picks a gesture, like a keybind with no keys
     var kind: Kind?
@@ -19,14 +18,12 @@ struct GestureBinding: Identifiable, Codable, Hashable, Defaults.Serializable {
 
     init(
         id: UUID = .init(),
-        name: String? = nil,
         fingerCount: Int = 2,
         kind: Kind? = .radialMenu,
         action: Action = .radialMenuActions,
         activationZone: ActivationZone = .titlebar
     ) {
         self.id = id
-        self.name = name
         self.fingerCount = fingerCount
         self.kind = kind
         self.action = action
@@ -121,10 +118,11 @@ extension GestureBinding {
         fingerCount <= 2 ? .titlebar : activationZone
     }
 
-    var defaultName: String {
+    /// `nil` while the gesture has no trigger
+    var displayName: String? {
         switch kind {
         case nil:
-            String(localized: "No Gesture", comment: "Default title for a gesture that has no trigger set yet")
+            nil
         case .radialMenu:
             String(
                 localized: "\(fingerCount)-finger Swipe or Magnify",
@@ -141,14 +139,6 @@ extension GestureBinding {
     /// Untranslated description for logs
     var logDescription: String {
         "\(fingerCount)-finger \(kind.map { "\($0)" } ?? "unset")"
-    }
-
-    var displayName: String {
-        if let name, !name.isEmpty {
-            return name
-        }
-
-        return defaultName
     }
 }
 

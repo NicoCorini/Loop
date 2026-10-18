@@ -95,18 +95,6 @@ struct GestureConfigurationView: View {
 
     var body: some View {
         LuminareForm {
-            LuminareSection(outerPadding: 0) {
-                LuminareTextField(
-                    gesture.defaultName,
-                    text: Binding(
-                        get: { gesture.name ?? "" },
-                        set: { gesture.name = $0 }
-                    )
-                )
-                .luminareFilledStates(.none)
-                .luminareBorderedStates(.none)
-            }
-
             LuminareSection {
                 LuminarePicker(
                     compactElements: GestureCategory.allCases.map(Optional.some),

@@ -361,13 +361,13 @@ extension MultitouchTrigger {
 
     private func directionalSwipeKind(normalizedAngle: CGFloat) -> GestureBinding.Kind {
         if normalizedAngle >= 7 * .pi / 4 || normalizedAngle < .pi / 4 {
-            return .swipeUp
+            .swipeUp
         } else if normalizedAngle >= .pi / 4, normalizedAngle < 3 * .pi / 4 {
-            return .swipeRight
+            .swipeRight
         } else if normalizedAngle >= 3 * .pi / 4, normalizedAngle < 5 * .pi / 4 {
-            return .swipeDown
+            .swipeDown
         } else {
-            return .swipeLeft
+            .swipeLeft
         }
     }
 

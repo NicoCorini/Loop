@@ -20841,9 +20841,6 @@
         }
       }
     },
-    "No Gesture" : {
-      "comment" : "Default title for a gesture that has no trigger set yet"
-    },
     "No gestures" : {
       "comment" : "Empty state title in gestures settings",
       "localizations" : {

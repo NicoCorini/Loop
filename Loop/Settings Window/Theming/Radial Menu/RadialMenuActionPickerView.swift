@@ -81,6 +81,7 @@ struct RadialMenuActionPickerView: View {
                                     IconView(action: action)
 
                                     Text(action.getName())
+                                        .fontWeight(.regular)
                                         .lineLimit(1)
                                 }
                             } else {

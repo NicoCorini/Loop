@@ -141,20 +141,12 @@ struct GestureItemView: View {
 
     private var gestureConfiguration: some View {
         Group {
-            if gesture.kind == nil {
-                Button {
-                    isGestureConfigPresented = true
-                } label: {
-                    Text(String(localized: "Set Gesture…", comment: "Button title on a gesture that has no trigger set yet. Opens the gesture configuration."))
-                        .lineLimit(1)
-                        .padding(.horizontal, horizontalPadding)
-                }
-            } else {
+            if let displayName = gesture.displayName {
                 Button {
                     isGestureConfigPresented = true
                 } label: {
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text(gesture.displayName)
+                        Text(displayName)
                             .lineLimit(1)
 
                         if gesture.activationZone == .titlebar {
@@ -163,6 +155,7 @@ struct GestureItemView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .fontWeight(.regular)
                     .padding(.horizontal, 4)
                     .contentShape(.rect)
                     .animation(luminareAnimation, value: gesture.activationZone)
@@ -170,6 +163,14 @@ struct GestureItemView: View {
                 .luminareFilledStates([.hovering, .pressed])
                 .luminareBorderedStates(.hovering)
                 .opacity(hasConflict ? 0.5 : 1)
+            } else {
+                Button {
+                    isGestureConfigPresented = true
+                } label: {
+                    Text(String(localized: "Set Gesture…", comment: "Button title on a gesture that has no trigger set yet. Opens the gesture configuration."))
+                        .lineLimit(1)
+                        .padding(.horizontal, horizontalPadding)
+                }
             }
         }
         .luminareContentSize(contentMode: .fit, hasFixedHeight: true)
@@ -203,12 +204,14 @@ struct GestureItemView: View {
                             .frame(width: 18)
 
                         Text(String(localized: "Radial Menu", comment: "Label shown for a gesture configured to open the radial menu"))
+                            .fontWeight(.regular)
                             .lineLimit(1)
                     } else if let action = resolvedAction {
                         IconView(action: action)
 
                         if let info = action.direction.infoText {
                             Text(action.getName())
+                                .fontWeight(.regular)
                                 .lineLimit(1)
                                 .padding(.trailing, 4)
                                 .luminareToolTip(attachedTo: .topTrailing) {
@@ -217,6 +220,7 @@ struct GestureItemView: View {
                                 }
                         } else {
                             Text(action.getName())
+                                .fontWeight(.regular)
                                 .lineLimit(1)
                         }
                     } else {
@@ -225,6 +229,7 @@ struct GestureItemView: View {
                             .foregroundStyle(.secondary)
 
                         Text("Linked keybind not found")
+                            .fontWeight(.regular)
                             .lineLimit(1)
                             .foregroundStyle(.secondary)
                     }
