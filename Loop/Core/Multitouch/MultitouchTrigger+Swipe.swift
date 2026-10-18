@@ -29,7 +29,9 @@ extension MultitouchTrigger {
         if let radialMenuGesture = entry.radialMenuGesture {
             await handleRadialMenuSwipe(swipe, fingerCount: fingerCount, gesture: radialMenuGesture)
         } else {
-            let direction = directionalSwipeKind(angle: swipe.angle)
+            let direction = directionalSwipeKind(
+                normalizedAngle: RadialGestureGeometry.normalizedAngle(fromSubsurfaceAngle: swipe.angle)
+            )
             let directionalGesture = entry.directionalGestures.first { $0.kind == direction }
             let isTerminal = switch swipe.phase {
             case .ended(_), .cancelled:
@@ -353,10 +355,6 @@ extension MultitouchTrigger {
     private func clearSwipeAction(fingerCount: Int) {
         guard recognizerRegistry.session(for: fingerCount)?.clearSwipeAction() == true else { return }
         clearActionSelection()
-    }
-
-    private func directionalSwipeKind(angle: CGFloat) -> GestureBinding.Kind {
-        directionalSwipeKind(normalizedAngle: RadialGestureGeometry.normalizedAngle(fromSubsurfaceAngle: angle))
     }
 
     private func directionalSwipeKind(normalizedAngle: CGFloat) -> GestureBinding.Kind {

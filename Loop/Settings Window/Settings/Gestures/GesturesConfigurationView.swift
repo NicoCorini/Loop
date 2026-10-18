@@ -51,7 +51,7 @@ struct GesturesConfigurationView: View {
             LuminareButtonRow {
                 Button(String(localized: "Add", comment: "Used to add items to a list")) {
                     gestures.insert(
-                        GestureBinding(kind: nil, action: .singleAction(.custom(.init(.noAction)))),
+                        GestureBinding(),
                         at: 0
                     )
                 }

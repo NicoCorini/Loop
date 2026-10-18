@@ -19,8 +19,8 @@ struct GestureBinding: Identifiable, Codable, Hashable, Defaults.Serializable {
     init(
         id: UUID = .init(),
         fingerCount: Int = 2,
-        kind: Kind? = .radialMenu,
-        action: Action = .radialMenuActions,
+        kind: Kind? = nil,
+        action: Action = .singleAction(.custom(.init(.noAction))),
         activationZone: ActivationZone = .titlebar
     ) {
         self.id = id
@@ -135,11 +135,6 @@ extension GestureBinding {
             )
         }
     }
-
-    /// Untranslated description for logs
-    var logDescription: String {
-        "\(fingerCount)-finger \(kind.map { "\($0)" } ?? "unset")"
-    }
 }
 
 // MARK: - Conflict Detection
@@ -198,4 +193,10 @@ extension GestureBinding {
             activationZone: .titlebar
         )
     ]
+}
+
+extension GestureBinding: CustomStringConvertible {
+    var description: String {
+        "GestureBinding(fingerCount: \(fingerCount), kind: \(kind.map { "\($0)" } ?? "unset"))"
+    }
 }

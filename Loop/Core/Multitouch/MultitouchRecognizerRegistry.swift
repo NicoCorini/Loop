@@ -121,8 +121,7 @@ final class MultitouchRecognizerRegistry {
 
         let conflictingGestures = gestures
             .filter { conflictingIDs.contains($0.id) }
-            .map(\.logDescription)
-        log.warn("Disabled gestures that conflict on the same finger count: \(conflictingGestures.joined(separator: ", "))")
+        log.warn("Disabled gestures that conflict on the same finger count: \(conflictingGestures)")
     }
 
     private func startRecognizer(

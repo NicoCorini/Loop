@@ -96,13 +96,11 @@ struct GestureItemView: View {
 
                 gestureConfiguration
                     .luminareToolTip(attachedTo: .topTrailing, hidden: !hasConflict && !overridesRadialMenu) {
-                        Group {
-                            if hasConflict {
-                                Text(String(localized: "Another gesture is set up the same way.", comment: "Tooltip shown on a conflicting gesture in settings"))
-                            } else {
-                                Text(String(localized: "Takes priority over the radial menu for this gesture.", comment: "Tooltip shown on a gesture in settings that overrides one direction of a radial menu gesture using the same finger count"))
-                            }
-                        }
+                        Text(
+                            hasConflict
+                                ? String(localized: "Another gesture is set up the same way.", comment: "Tooltip shown on a conflicting gesture in settings")
+                                : String(localized: "Takes priority over the radial menu for this gesture.", comment: "Tooltip shown on a gesture in settings that overrides one direction of a radial menu gesture using the same finger count")
+                        )
                         .padding(6)
                     }
             }

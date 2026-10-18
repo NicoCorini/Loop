@@ -144,8 +144,8 @@ extension MultitouchTrigger {
             return false
         }
 
-        if let resolvedKind = session.resolvedGesture?.kind,
-           resolvedKind == .magnifyOut || resolvedKind == .magnifyIn {
+        // The stroke always begins as the radial menu, so anything else means an override took it
+        if session.resolvedGesture?.kind != .radialMenu {
             return true
         }
 
